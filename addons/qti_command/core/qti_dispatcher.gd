@@ -15,6 +15,8 @@ var registry: QTIRegistry
 var type_registry: QTITypeRegistry
 ## The permission resolver consulted before each execution.
 var permission_resolver: QTIPermissionResolver
+## Resolves the active [QTISyntaxProvider] for a given [QTIContext].
+var syntax_registry: QTISyntaxRegistry
 ## The optional network bridge for server-only routing and replication.
 var net_bridge: QTINetBridge = null
 ## String that raw input must begin with to be treated as a command (default [code]"/"[/code]).
@@ -25,10 +27,11 @@ var case_sensitive: bool = false
 ## Tracks the last execution timestamp per [code]invoker_key:command_name[/code] for cooldown enforcement.
 var cooldown_tracker: Dictionary = {}
 
-func _init(p_registry: QTIRegistry, p_type_registry: QTITypeRegistry, p_permission_resolver: QTIPermissionResolver) -> void:
+func _init(p_registry: QTIRegistry, p_type_registry: QTITypeRegistry, p_permission_resolver: QTIPermissionResolver, p_syntax_registry: QTISyntaxRegistry) -> void:
     registry = p_registry
     type_registry = p_type_registry
     permission_resolver = p_permission_resolver
+    syntax_registry = p_syntax_registry
 
 ## Returns a stable string key that uniquely identifies the invoker in [param ctx]. Used for per-invoker cooldown tracking and history recording.
 func invoker_key(ctx: QTIContext) -> String:
@@ -47,7 +50,7 @@ func check_permission(def: QTICommandDef, ctx: QTIContext) -> bool:
             return true
     return false
 
-## Parses [param raw_input], resolves the command, checks permissions and cooldowns, parses arguments, runs the validate callable (if any), and calls the execute handler. When [param emit_signals] is [code]false[/code], [signal command_executed] and [signal command_failed] are suppressed (used by [method QTICommand.simulate]).
+## Parses [param raw_input] (splitting it into a chain of one or more links via the active [QTISyntaxProvider]), resolves each link's command, checks permissions and cooldowns, parses arguments, runs the validate callable (if any), and calls the execute handler, applying [code]&&[/code]/[code]||[/code]/[code];[/code]/[code]|[/code] chain semantics between links. Exactly one [QTIResult] is returned (the last executed link's), and when [param emit_signals] is [code]true[/code] [signal command_executed]/[signal command_failed] fire exactly once for the whole chain, not once per link. When [param emit_signals] is [code]false[/code], signals are suppressed entirely (used by [method QTICommand.simulate]). When more than one link actually executes, the returned result's [member QTIResult.data] gains a [code]"chain_results"[/code] key ([code]Array[QTIResult][/code], one entry per executed link in order) so UI surfaces can display every link's output instead of only the last one.
 func dispatch(raw_input: String, ctx: QTIContext, emit_signals: bool = true) -> QTIResult:
     ctx.raw_input = raw_input
     var trimmed := raw_input.strip_edges()
@@ -59,35 +62,84 @@ func dispatch(raw_input: String, ctx: QTIContext, emit_signals: bool = true) -> 
     if body.strip_edges() == "":
         return QTIResult.make_unhandled(raw_input)
 
-    var tokens := QTITokenizer.tokenize(body)
-    if tokens.is_empty():
+    var provider := syntax_registry.resolve_provider(ctx)
+    var links := provider.split_chain(body)
+    if links.is_empty():
         return QTIResult.make_unhandled(raw_input)
 
-    var cmd_token := tokens[0]
+    var previous_result: QTIResult = null
+    var final_result: QTIResult = null
+    var chain_results: Array[QTIResult] = []
+    var is_chain := links.size() > 1
+
+    for i in range(links.size()):
+        var link: QTIChainLink = links[i]
+        if link.segment.strip_edges() == "":
+            continue
+        if i > 0:
+            match link.join_type:
+                &"and":
+                    if previous_result != null and not previous_result.success:
+                        break
+                &"or":
+                    if previous_result != null and previous_result.success:
+                        continue
+                &"sequence":
+                    pass
+                &"pipe":
+                    if not provider.supports_piping():
+                        final_result = QTIResult.make_fail("", "Syntax '%s' does not support piping." % provider.get_name(), "syntax")
+                        chain_results.append(final_result)
+                        break
+
+        var result := _dispatch_segment(provider, link, ctx, previous_result)
+        if is_chain and not result.handled:
+            result = QTIResult.make_fail(result.command_name, "Command not found.", "not_found")
+        previous_result = result
+        final_result = result
+        chain_results.append(result)
+
+    if final_result == null:
+        final_result = QTIResult.make_unhandled(raw_input)
+    elif chain_results.size() > 1:
+        final_result.data["chain_results"] = chain_results
+
+    if emit_signals and final_result.handled:
+        if final_result.success:
+            command_executed.emit(final_result)
+        else:
+            command_failed.emit(final_result)
+
+    return final_result
+
+func _dispatch_segment(provider: QTISyntaxProvider, link: QTIChainLink, ctx: QTIContext, previous_result: QTIResult) -> QTIResult:
+    var prepared := provider.prepare_segment(link.segment.strip_edges(), ctx)
+    var tokens := provider.tokenize(prepared)
+    if tokens.is_empty():
+        return QTIResult.make_unhandled(prepared)
+
+    var cmd_token: QTIToken = tokens[0]
     var cmd_name := cmd_token.text if case_sensitive else cmd_token.text.to_lower()
 
     var runtime_target := registry.resolve_runtime_alias(cmd_name)
     if runtime_target != "":
-        var rest := QTITokenizer.raw_remainder(body, cmd_token.end)
+        var rest := QTITokenizerUtil.raw_remainder(prepared, cmd_token.end)
         var new_body := runtime_target if rest == "" else "%s %s" % [runtime_target, rest]
-        return dispatch(prefix + new_body, ctx, emit_signals)
+        return _dispatch_segment(provider, QTIChainLink.new(new_body, link.join_type, 0), ctx, previous_result)
 
     var def := registry.get_command(cmd_name)
     if def == null:
-        return QTIResult.make_unhandled(raw_input)
+        return QTIResult.make_unhandled(prepared)
 
     ctx._command_name = def.name
 
     if def.available_when_callable.is_valid() and not def.available_when_callable.call():
-        return QTIResult.make_unhandled(raw_input)
+        return QTIResult.make_unhandled(prepared)
 
     if not check_permission(def, ctx):
         if def.is_hidden or def.hide_when_denied:
-            return QTIResult.make_unhandled(raw_input)
-        var denied := QTIResult.make_fail(def.name, "You do not have permission to run this command.", "permission")
-        if emit_signals:
-            command_failed.emit(denied)
-        return denied
+            return QTIResult.make_unhandled(prepared)
+        return QTIResult.make_fail(def.name, "You do not have permission to run this command.", "permission")
 
     if def.cooldown_seconds > 0.0:
         var key := "%s:%s" % [invoker_key(ctx), def.name]
@@ -96,46 +148,49 @@ func dispatch(raw_input: String, ctx: QTIContext, emit_signals: bool = true) -> 
             var elapsed: float = now - cooldown_tracker[key]
             if elapsed < def.cooldown_seconds:
                 var remaining: float = def.cooldown_seconds - elapsed
-                var on_cooldown := QTIResult.make_fail(def.name, "Command on cooldown (%.1fs remaining)." % remaining, "cooldown", {"remaining_seconds": remaining})
-                if emit_signals:
-                    command_failed.emit(on_cooldown)
-                return on_cooldown
+                return QTIResult.make_fail(def.name, "Command on cooldown (%.1fs remaining)." % remaining, "cooldown", {"remaining_seconds": remaining})
 
     if def.is_server_only and net_bridge != null and net_bridge.is_networked() and not net_bridge.is_server():
-        net_bridge.request_remote_dispatch(raw_input)
+        if link.join_type == &"pipe" and previous_result != null:
+            return QTIResult.make_fail(def.name, "Cannot pipe a local result into a server-only command from a non-server peer.", "syntax")
+        var segment_command_string := (prefix + prepared) if prefix != "" else prepared
+        net_bridge.request_remote_dispatch(segment_command_string)
         var pending := QTIResult.make_ok(def.name, "Command sent to server.")
         pending.data["remote_pending"] = true
         return pending
 
     var rest_tokens := tokens.slice(1)
-    var extraction := QTITokenizer.extract_flags(rest_tokens)
-    var positional_tokens: Array = extraction["positional"]
-    var flag_values: Dictionary = extraction["flags"]
+    var bind_result := provider.bind_arguments(rest_tokens, def, prepared)
+    if not bind_result.success:
+        return QTIResult.make_fail(def.name, bind_result.error_message, "validation")
+    var bound: Dictionary = bind_result.bound
 
-    var parsed := _parse_arguments(def, positional_tokens, body, ctx)
+    if link.join_type == &"pipe" and previous_result != null:
+        var unfilled: Array[QTIArgument] = []
+        for a in def.positional_args:
+            if not bound.has(a.name):
+                unfilled.append(a)
+        var pipe_values := provider.resolve_pipe_input(previous_result, unfilled)
+        for k in pipe_values.keys():
+            if not bound.has(k):
+                bound[k] = pipe_values[k]
+
+    var parsed := _bind_to_typed_args(def, bound, ctx)
     if not parsed["success"]:
-        var fail_result: QTIResult = parsed["result"]
-        if emit_signals:
-            command_failed.emit(fail_result)
-        return fail_result
+        return parsed["result"]
     ctx._args = parsed["args"]
 
     ctx._flags = {}
     for f in def.flags:
-        ctx._flags[f.name] = flag_values.get(f.name, false)
+        ctx._flags[f.name] = bound.get(f.name, false)
 
     if def.validate_callable.is_valid():
         var validation = def.validate_callable.call(ctx)
         if validation is QTIResult and not validation.success:
-            if emit_signals:
-                command_failed.emit(validation)
             return validation
 
     if not def.execute_callable.is_valid():
-        var no_handler := QTIResult.make_fail(def.name, "Command '%s' has no execute handler." % def.name, "runtime")
-        if emit_signals:
-            command_failed.emit(no_handler)
-        return no_handler
+        return QTIResult.make_fail(def.name, "Command '%s' has no execute handler." % def.name, "runtime")
 
     var raw_result = def.execute_callable.call(ctx)
     var result: QTIResult
@@ -151,24 +206,26 @@ func dispatch(raw_input: String, ctx: QTIContext, emit_signals: bool = true) -> 
     if def.cooldown_seconds > 0.0:
         cooldown_tracker["%s:%s" % [invoker_key(ctx), def.name]] = Time.get_ticks_msec() / 1000.0
 
-    if emit_signals:
-        if result.success:
-            command_executed.emit(result)
-        else:
-            command_failed.emit(result)
-
     if def.does_replicate and result.success and net_bridge != null:
         net_bridge.replicate(def.name, result)
 
     return result
 
-## Returns command-name and argument-value suggestions for [param partial_input]. Suggestions are full strings (prefix included) ready to replace the input field.
+## Returns command-name and argument-value suggestions for [param partial_input]. Suggestions are full strings (prefix, and any preceding chain segments, included) ready to replace the input field. Chain-splitting is delegated to the active provider first; only the last, still-being-typed link is autocompleted.
 func autocomplete(partial_input: String, ctx: QTIContext) -> Array[String]:
     var suggestions: Array[String] = []
     var trimmed := partial_input
     if prefix != "" and trimmed.begins_with(prefix):
         trimmed = trimmed.substr(prefix.length())
-    var tokens := QTITokenizer.tokenize(trimmed)
+
+    var provider := syntax_registry.resolve_provider(ctx)
+    var links := provider.split_chain(trimmed)
+    if links.is_empty():
+        return suggestions
+    var last_link: QTIChainLink = links[links.size() - 1]
+    var chain_prelude := prefix + trimmed.substr(0, last_link.start)
+
+    var tokens := provider.tokenize(last_link.segment)
     var ends_with_space := partial_input.ends_with(" ")
 
     if tokens.is_empty() or (tokens.size() == 1 and not ends_with_space):
@@ -182,7 +239,7 @@ func autocomplete(partial_input: String, ctx: QTIContext) -> Array[String]:
                 continue
             for c in [def.name] + def.aliases:
                 if c.begins_with(partial_name):
-                    suggestions.append(prefix + c)
+                    suggestions.append(chain_prelude + c)
         return suggestions
 
     var cmd_name := tokens[0].text if case_sensitive else tokens[0].text.to_lower()
@@ -203,15 +260,11 @@ func autocomplete(partial_input: String, ctx: QTIContext) -> Array[String]:
                     suggestions.append(s)
     return suggestions
 
-func _parse_arguments(def: QTICommandDef, tokens: Array, full_body: String, ctx: QTIContext) -> Dictionary:
+func _bind_to_typed_args(def: QTICommandDef, bound: Dictionary, ctx: QTIContext) -> Dictionary:
     var args := {}
-    var n := def.positional_args.size()
-    for i in range(n):
-        var arg_def: QTIArgument = def.positional_args[i]
-        var token: QTITokenizer.Token = tokens[i] if i < tokens.size() else null
-
+    for arg_def in def.positional_args:
         if arg_def.rest:
-            var raw := QTITokenizer.raw_remainder(full_body, token.start) if token != null else ""
+            var raw: String = bound.get(arg_def.name, "")
             if raw == "":
                 if arg_def.has_default:
                     args[arg_def.name] = arg_def.default
@@ -223,7 +276,7 @@ func _parse_arguments(def: QTICommandDef, tokens: Array, full_body: String, ctx:
                 args[arg_def.name] = raw
             continue
 
-        if token == null:
+        if not bound.has(arg_def.name):
             if arg_def.has_default:
                 args[arg_def.name] = arg_def.default
                 continue
@@ -232,7 +285,8 @@ func _parse_arguments(def: QTICommandDef, tokens: Array, full_body: String, ctx:
                 continue
             return {"success": false, "result": _missing_arg_result(def, arg_def)}
 
-        var parse_result: QTIParseResult = type_registry.parse(arg_def.type, token.text, ctx)
+        var raw_value: String = bound[arg_def.name]
+        var parse_result: QTIParseResult = type_registry.parse(arg_def.type, raw_value, ctx)
         if not parse_result.success:
             var msg := parse_result.error_message
             if parse_result.error_type != "runtime":
@@ -244,9 +298,6 @@ func _parse_arguments(def: QTICommandDef, tokens: Array, full_body: String, ctx:
             return {"success": false, "result": QTIResult.make_fail(def.name, validation_error, "validation")}
 
         args[arg_def.name] = parse_result.value
-
-    if tokens.size() > n:
-        return {"success": false, "result": QTIResult.make_fail(def.name, "Too many arguments for '%s'. Usage: %s" % [def.name, def.usage_string()], "validation")}
 
     return {"success": true, "args": args}
 

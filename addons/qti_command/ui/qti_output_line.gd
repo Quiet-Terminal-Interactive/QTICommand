@@ -11,8 +11,19 @@ func _ready() -> void:
     autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     meta_clicked.connect(_on_meta_clicked)
 
-## Renders [param result] as coloured BBCode text. Success results are white; failures are red. When [member QTIResult.data] contains [code]"headers"[/code] and [code]"rows"[/code] keys, a BBCode table is appended below the message.
+## Renders [param result] as coloured BBCode text. Success results are white; failures are red. When [member QTIResult.data] contains [code]"headers"[/code] and [code]"rows"[/code] keys, a BBCode table is appended below the message. When [member QTIResult.data] contains a [code]"chain_results"[/code] key (set by [method QTIDispatcher.dispatch] for a multi-link [code]&&[/code]/[code]||[/code]/[code];[/code]/[code]|[/code] chain), each link's result is rendered on its own line instead of just the final one.
 func display_result(result: QTIResult) -> void:
+    if result.data.has("chain_results"):
+        var parts: Array[String] = []
+        for link_result in result.data["chain_results"]:
+            var rendered := _render_single(link_result)
+            if rendered != "":
+                parts.append(rendered)
+        text = "\n".join(parts)
+        return
+    text = _render_single(result)
+
+func _render_single(result: QTIResult) -> String:
     var out := ""
     if result.message != "":
         var color := "white" if result.success else "red"
@@ -21,7 +32,7 @@ func display_result(result: QTIResult) -> void:
         if out != "":
             out += "\n"
         out += _render_table(result.data["headers"], result.data["rows"])
-    text = out
+    return out
 
 ## Renders [param message] as raw BBCode text without any colouring applied.
 func display_message(message: String) -> void:

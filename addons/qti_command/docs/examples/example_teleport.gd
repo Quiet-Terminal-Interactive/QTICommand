@@ -18,4 +18,4 @@ func _register_commands() -> void:
             if ctx.invoker is Node3D:
                 ctx.invoker.global_position = pos
             return ctx.ok("Teleported to %s" % pos)
-        )
+    )

@@ -9,6 +9,7 @@ extends Control
 
 var _registry: QTIRegistry
 var _type_registry: QTITypeRegistry
+var _syntax_registry: QTISyntaxRegistry
 var _dispatcher: QTIDispatcher
 var _input_line: LineEdit
 var _output: RichTextLabel
@@ -16,7 +17,8 @@ var _output: RichTextLabel
 func _ready() -> void:
     _type_registry = QTITypeRegistry.new()
     _registry = QTIRegistry.new(_type_registry)
-    _dispatcher = QTIDispatcher.new(_registry, _type_registry, QTIPermissionResolver.new())
+    _syntax_registry = QTISyntaxRegistry.new()
+    _dispatcher = QTIDispatcher.new(_registry, _type_registry, QTIPermissionResolver.new(), _syntax_registry)
     _build_ui()
 
 ## Returns a [QTICommandBuilder] for registering a command scoped to the editor dock. Editor commands are completely separate from runtime commands and only run inside the editor, not in a playing game.

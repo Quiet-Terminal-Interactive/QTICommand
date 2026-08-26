@@ -15,18 +15,21 @@ signal command_failed(result: QTIResult)
 var _registry: QTIRegistry
 var _type_registry: QTITypeRegistry
 var _permission_resolver: QTIPermissionResolver
+var _syntax_registry: QTISyntaxRegistry
 var _dispatcher: QTIDispatcher
 var _history: QTIHistory
 var _net_bridge: QTINetBridge = null
 var _builtins_enabled: bool = true
 var _builtins_registered: bool = false
 var _last_invoker_key: String = ""
+var _last_raw_input: String = ""
 
 func _ready() -> void:
     _type_registry = QTITypeRegistry.new()
     _registry = QTIRegistry.new(_type_registry)
     _permission_resolver = QTIPermissionResolver.new()
-    _dispatcher = QTIDispatcher.new(_registry, _type_registry, _permission_resolver)
+    _syntax_registry = QTISyntaxRegistry.new()
+    _dispatcher = QTIDispatcher.new(_registry, _type_registry, _permission_resolver, _syntax_registry)
     _history = QTIHistory.new()
 
     _dispatcher.command_executed.connect(_on_dispatcher_executed)
@@ -37,11 +40,11 @@ func _ready() -> void:
         enable_builtins(true)
 
 func _on_dispatcher_executed(result: QTIResult) -> void:
-    _history.record(_last_invoker_key, result.command_name, true)
+    _history.record(_last_invoker_key, _last_raw_input, true)
     command_executed.emit(result)
 
 func _on_dispatcher_failed(result: QTIResult) -> void:
-    _history.record(_last_invoker_key, result.command_name, false)
+    _history.record(_last_invoker_key, _last_raw_input, false)
     command_failed.emit(result)
 
 ## Returns a fluent [QTICommandBuilder] for [param name]. Chain builder calls and end with [method QTICommandBuilder.execute] to register.
@@ -68,6 +71,7 @@ func from_function(callable: Callable, name: String) -> QTICommandBuilder:
 ## Parses and dispatches [param raw_input] using [param context]. Returns a [QTIResult] describing the outcome. Emits [signal command_executed] or [signal command_failed] and records the call in history.
 func dispatch(raw_input: String, context: QTIContext) -> QTIResult:
     _last_invoker_key = _dispatcher.invoker_key(context)
+    _last_raw_input = raw_input
     return _dispatcher.dispatch(raw_input, context, true)
 
 ## Returns [code]true[/code] if [param context] passes all permission checks for the command named [param name]. Returns [code]false[/code] if the command does not exist or the invoker lacks a required role.
@@ -111,6 +115,18 @@ func set_runtime_alias(name: String, command_string: String) -> void:
 func set_permission_resolver(resolver: QTIPermissionResolver) -> void:
     _permission_resolver = resolver
     _dispatcher.permission_resolver = resolver
+
+## Sets the active [QTISyntaxProvider]. [param syntax] is a [QTISyntax] constant or a name previously passed to [method register_syntax].
+func set_syntax(syntax: Variant, source_filter: Dictionary = {}) -> void:
+    _syntax_registry.set_syntax(syntax, source_filter)
+
+## Registers a custom [QTISyntaxProvider] under [param name], so it can later be passed to [method set_syntax].
+func register_syntax(name: String, provider: QTISyntaxProvider) -> void:
+    _syntax_registry.register_syntax(name, provider)
+
+## Returns the [QTISyntaxProvider] that would be used to dispatch for [param ctx] right now.
+func get_active_syntax_provider(ctx: QTIContext) -> QTISyntaxProvider:
+    return _syntax_registry.resolve_provider(ctx)
 
 ## Sets the command prefix (default [code]"/"[/code]). Input that does not start with this prefix is returned as an unhandled result. Set to [code]""[/code] to accept all input.
 func set_prefix(prefix: String) -> void:
@@ -168,4 +184,5 @@ func simulate(raw_input: String, context: QTIContext, opts: Dictionary = {}) -> 
     if not emit_signals:
         return _dispatcher.dispatch(raw_input, context, false)
     _last_invoker_key = _dispatcher.invoker_key(context)
+    _last_raw_input = raw_input
     return _dispatcher.dispatch(raw_input, context, true)

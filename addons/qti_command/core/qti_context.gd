@@ -20,6 +20,11 @@ var _args: Dictionary = {}
 var _flags: Dictionary = {}
 var _command_name: String = ""
 
+## When set (typically only by [method QTITestContext.mock]), overrides both the per-source and flobal active [QTISyntaxProvider] for this context's dispatch calls, isolating tests from mutable global syntax configuration.
+var syntax_override: Variant = null
+## Provider options merged in when [member syntax_override] is set (e.g. [code]{"allow_sequence_chaining": true}[/code]).
+var syntax_override_options: Dictionary = {}
+
 ## Returns the parsed value of positional argument [param arg_name], or [code]null[/code] if the argument was optional and not provided.
 func arg(arg_name: StringName) -> Variant:
     return _args.get(arg_name)

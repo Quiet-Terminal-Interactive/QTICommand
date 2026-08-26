@@ -26,6 +26,17 @@ print(result.message)   # "pong"
 
 See `examples/example_teleport.gd` for the full fluent-builder surface (args, permissions, cooldowns, aliases), `examples/example_chat_integration.gd` for wiring into a chat system with clean fallthrough, and `examples/example_decorator_style.gd` for the typed-function secondary API.
 
+## Syntax providers
+
+Command parsing is pluggable per-project and per-invocation-source. Beyond the default grammar, built-in `bash`- and `powershell`-flavored syntaxes add command chaining (`&&`, `||`, `;`) and piping (`|`):
+
+```gdscript
+QTICommand.set_syntax(QTISyntax.BASH)
+QTICommand.set_syntax(QTISyntax.POWERSHELL, {"source": &"console"})   # per-source override
+```
+
+See `docs/SYNTAX.md` for the full reference (quoting/substitution rules, the piping data convention, PowerShell's named-parameter binding, and a security note on enabling chaining for untrusted/chat-sourced input) and `docs/examples/example_syntax_providers.gd` for a runnable demo.
+
 ## Entity resolution
 
 `QTIType.PLAYER_REF` / `QTIType.ENTITY_REF` arguments fuzzy-resolve a typed name against a list of `Node`s but ship with no default fallback. You must register a source before any command using these types is dispatched:
