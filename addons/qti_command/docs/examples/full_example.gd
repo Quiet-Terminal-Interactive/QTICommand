@@ -98,7 +98,7 @@ func _register_basic_commands() -> void:
         .alias("hi") \
         .arg("name", QTIType.STRING, {"optional": true, "default": "world"}) \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            return ctx.ok("Hello, %s!" % ctx.get("name"))
+            return ctx.ok("Hello, %s!" % ctx.arg("name"))
         )
 
     # Boolean flag: /status --verbose adds extra metrics.
@@ -135,7 +135,7 @@ func _register_world_commands() -> void:
         .permission("moderator") \
         .cooldown(2.0) \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var weather: String = ctx.get("type")
+            var weather: String = ctx.arg("type")
             # WorldManager.set_weather(weather)
             return ctx.ok("Weather set to '%s'" % weather)
         )
@@ -147,7 +147,7 @@ func _register_world_commands() -> void:
         .arg("hour", QTIType.FLOAT, {"min": 0.0, "max": 24.0}) \
         .permission("moderator") \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var hour: float = ctx.get("hour")
+            var hour: float = ctx.arg("hour")
             # WorldManager.set_time(hour)
             return ctx.ok("Time set to %02d:%02d" % [int(hour), int(fmod(hour, 1.0) * 60.0)])
         )
@@ -165,10 +165,10 @@ func _register_world_commands() -> void:
         .permission("admin") \
         .cooldown(1.0) \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var target: QTIPlayerRef = ctx.get("target")
+            var target: QTIPlayerRef = ctx.arg("target")
             if target == null or target.value == null:
                 return ctx.fail("No player found matching that name.")
-            var pos := Vector3(ctx.get("x"), ctx.get("y"), ctx.get("z"))
+            var pos := Vector3(ctx.arg("x"), ctx.arg("y"), ctx.arg("z"))
             if target.value is Node3D:
                 target.value.global_position = pos
             return ctx.ok("Teleported %s to %s" % [target.matched_name, pos])
@@ -183,11 +183,11 @@ func _register_admin_commands() -> void:
         .arg("reason", QTIType.STRING, {"optional": true, "default": "No reason given", "rest": true}) \
         .permission("admin") \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var target: QTIPlayerRef = ctx.get("target")
+            var target: QTIPlayerRef = ctx.arg("target")
             if target == null or target.value == null:
                 return ctx.fail("Player not found.")
-            # target.value.kick(ctx.get("reason"))
-            return ctx.ok("Kicked %s: %s" % [target.matched_name, ctx.get("reason")])
+            # target.value.kick(ctx.arg("reason"))
+            return ctx.ok("Kicked %s: %s" % [target.matched_name, ctx.arg("reason")])
         )
 
     # .validate() runs before .execute(); return a non-empty string to abort.
@@ -198,7 +198,7 @@ func _register_admin_commands() -> void:
         .arg("speed", QTIType.FLOAT) \
         .permission("admin") \
         .validate(func(ctx: QTIContext) -> String:
-            var spd: float = ctx.get("speed")
+            var spd: float = ctx.arg("speed")
             if spd < 0.0:
                 return "Speed cannot be negative."
             if spd > 9999.0:
@@ -206,11 +206,11 @@ func _register_admin_commands() -> void:
             return ""
         ) \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var target: QTIPlayerRef = ctx.get("target")
+            var target: QTIPlayerRef = ctx.arg("target")
             if target == null or target.value == null:
                 return ctx.fail("Player not found.")
-            # target.value.speed = ctx.get("speed")
-            return ctx.ok("Set %s speed to %.1f" % [target.matched_name, ctx.get("speed")])
+            # target.value.speed = ctx.arg("speed")
+            return ctx.ok("Set %s speed to %.1f" % [target.matched_name, ctx.arg("speed")])
         )
 
     # .hidden() removes the command from /list and autocomplete for everyone.
@@ -235,10 +235,10 @@ func _register_permission_commands() -> void:
         .arg("role", QTIType.STRING, {"one_of": ["moderator", "admin"]}) \
         .permission("admin") \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var target: QTIPlayerRef = ctx.get("target")
+            var target: QTIPlayerRef = ctx.arg("target")
             if target == null or target.value == null:
                 return ctx.fail("Player not found.")
-            var role: String = ctx.get("role")
+            var role: String = ctx.arg("role")
             _permissions.grant_role(target.value, role)
             return ctx.ok("Granted '%s' to %s" % [role, target.matched_name])
         )
@@ -250,10 +250,10 @@ func _register_permission_commands() -> void:
         .arg("role", QTIType.STRING, {"one_of": ["moderator", "admin"]}) \
         .permission("admin") \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var target: QTIPlayerRef = ctx.get("target")
+            var target: QTIPlayerRef = ctx.arg("target")
             if target == null or target.value == null:
                 return ctx.fail("Player not found.")
-            var role: String = ctx.get("role")
+            var role: String = ctx.arg("role")
             _permissions.revoke_role(target.value, role)
             return ctx.ok("Revoked '%s' from %s" % [role, target.matched_name])
         )

@@ -21,7 +21,7 @@ var _flags: Dictionary = {}
 var _command_name: String = ""
 
 ## Returns the parsed value of positional argument [param arg_name], or [code]null[/code] if the argument was optional and not provided.
-func get(arg_name: StringName) -> Variant:
+func arg(arg_name: StringName) -> Variant:
     return _args.get(arg_name)
 
 ## Returns [code]true[/code] if the boolean flag [param flag_name] was present in the input.

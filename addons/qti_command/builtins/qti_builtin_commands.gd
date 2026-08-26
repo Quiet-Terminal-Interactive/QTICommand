@@ -43,8 +43,8 @@ static func register_all(qti) -> void:
         .arg("name", QTIType.STRING) \
         .arg("command", QTIType.STRING, {"rest": true}) \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var alias_name: String = ctx.get("name")
-            var target: String = ctx.get("command")
+            var alias_name: String = ctx.arg("name")
+            var target: String = ctx.arg("command")
             qti.set_runtime_alias(alias_name, target)
             return ctx.ok("Alias '%s' -> '%s' registered." % [alias_name, target])
     )
@@ -56,7 +56,7 @@ static func unregister_all(qti) -> void:
 static func _cmd_history(qti, ctx: QTIContext) -> QTIResult:
     var history: QTIHistory = qti.get_history()
     var key := str(ctx.invoker.get_instance_id()) if ctx.invoker is Object else str(ctx.invoker)
-    var entries := history.get_recent(ctx.get("n"), key)
+    var entries := history.get_recent(ctx.arg("n"), key)
     if entries.is_empty():
         return ctx.ok("No history yet.")
     var lines: Array[String] = []
@@ -69,7 +69,7 @@ static func _cmd_history(qti, ctx: QTIContext) -> QTIResult:
     return ctx.ok("\n".join(lines), {"headers": ["status", "command"], "rows": rows})
 
 static func _cmd_help(qti, ctx: QTIContext, as_table: bool) -> QTIResult:
-    var target = ctx.get("command")
+    var target = ctx.arg("command")
     if target != null and target != "":
         var def: QTICommandDef = qti.get_command(target)
         if def == null:

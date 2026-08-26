@@ -14,7 +14,7 @@ func _register_commands() -> void:
         .permission("admin") \
         .cooldown(1.0) \
         .execute(func(ctx: QTIContext) -> QTIResult:
-            var pos := Vector3(ctx.get("x"), ctx.get("y"), ctx.get("z"))
+            var pos := Vector3(ctx.arg("x"), ctx.arg("y"), ctx.arg("z"))
             if ctx.invoker is Node3D:
                 ctx.invoker.global_position = pos
             return ctx.ok("Teleported to %s" % pos)
